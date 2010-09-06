@@ -75,7 +75,7 @@ module RightAws
     
     include RightAwsBaseInterface
 
-    API_VERSION      = "2010-03-01"
+    API_VERSION      = "2010-08-01"
     DEFAULT_HOST     = 'cloudfront.amazonaws.com'
     DEFAULT_PORT     = 443
     DEFAULT_PROTOCOL = 'https'
@@ -223,6 +223,16 @@ module RightAws
       origin_access_identity +
       trusted_signers +
       "</#{xml_wrapper}>"
+    end
+
+    def invalidation_config_to_xml(config, xml_wrapper='InvalidationBatch') # :nodoc:
+      str = "<#{xml_wrapper}>\n"
+      config[:paths].each do |path|
+        str << "  <Path>#{path}</Path>\n"
+      end
+      str << "  <CallerReference>#{config[:caller_reference]}</CallerReference>\n"
+      str << "</#{xml_wrapper}>"
+      return str
     end
 
     #-----------------------------------------------------------------
@@ -430,6 +440,65 @@ module RightAws
       request_info(link, RightHttp2xxParser.new(:logger => @logger))
     end
 
+
+    # This action creates a new invalidation batch request.
+    # The request body must include an XML document with an InvalidationBatch element.
+    # Returns an invalidation batch or RightAws::AwsError exception.
+    # * <tt>aws_id</tt> - Your Distribution ID
+    # * <tt>paths</tt> - Array with your Files inclunding the Path
+    # ==== Result
+    #
+    #  {:status=>"InProgress",
+    #  :invalidation_batch=>{:caller_reference=>"201009061522516560777239", :paths=>["/foo.txt", "/bar.txt"]},
+    #  :id=>"InvalidationId",
+    #  :create_time=>"2010-09-06T13:22:52.149Z"}
+    #
+    def invalidate(aws_id, paths)
+      config = {}
+      config[:caller_reference] ||= generate_call_reference
+      config[:paths] = paths
+      link = generate_request('POST', "distribution/#{aws_id}/invalidation", {}, invalidation_config_to_xml(config))
+      request_info(link, AcfInvalidationParser.new(:logger => @logger))
+    end
+
+    # List your invalidation batches for your distribution id.
+    # Returns an invalidation list or RightAws::AwsError exception.
+    # * <tt>aws_id</tt> - Your Distribution ID
+    # ==== Options
+    # * <tt>marker</tt> - Use this parameter when paginating results to indicate where to begin in your list of invalidation batches.
+    # * <tt>max_items</tt> - The maximum number of invalidation batches you want in the response body.
+    # ==== Result
+    #
+    #  {:is_truncated=>true,
+    #  :next_marker=>"IOPRNL0APSDW4",
+    #  :max_items=>3,
+    #  :invalidations=>[{:status=>"Completed", :id=>"InvalidationId2"}, {:status=>"Completed", :id=>"InvalidationID1"}],
+    #  :marker=>"InvalidationId"}
+    #
+    def invalidation_list(aws_id, options = {})
+      opts = {}
+      opts['Marker'] = options[:marker]
+      opts['MaxItems'] = options[:max_items]
+      link = generate_request('GET', "distribution/#{aws_id}/invalidation", opts, nil)
+      request_info(link, AcfInvalidationListParser.new(:logger => @logger))
+    end
+
+    # To get the information about an invalidation
+    # Returns an invalidation batch or RightAws::AwsError exception.
+    # * <tt>aws_id</tt> - Your Distribution ID
+    # * <tt>invalidation_id</tt> - The InvalidationID
+    # ==== Result
+    #  {:create_time=>"2010-09-06T11:49:22.108Z",
+    #  :status=>"Completed",
+    #  :invalidation_batch=>{:paths=>["/foo.txt", "/bar.txt"],
+    #  :caller_reference=>"201009061349213442358645"},
+    #  :id=>"InvalidationId"}
+    #
+    def invalidation_detail(aws_id, invalidation_id)
+      link = generate_request('GET', "distribution/#{aws_id}/invalidation/#{invalidation_id}", {}, nil)
+      request_info(link, AcfInvalidationParser.new(:logger => @logger))
+    end
+
     #-----------------------------------------------------------------
     #      PARSERS:
     #-----------------------------------------------------------------
@@ -478,6 +547,57 @@ module RightAws
              %r{^(Streaming)?Distribution$},
              %r{^(Streaming)?DistributionConfig$}
           @result[:distributions] << @distribution
+        end
+      end
+    end
+
+    class AcfInvalidationParser < RightAWSParser # :nodoc:
+      def reset
+        @result = { :invalidation_batch => {}}
+      end
+      def tagstart(name, attributes)
+        case full_tag_name
+        when %r{InvalidationBatch$}
+          @invalidation_batch = {}
+        end
+      end
+      def tagend(name)
+        case name
+          when 'Id'              then @result[:id]       = @text
+          when 'Status'          then @result[:status]   = @text
+          when 'CreateTime'      then @result[:create_time]  = @text
+          when 'Path'            then (@invalidation_batch[:paths] ||= []) << @text
+          when 'CallerReference' then @invalidation_batch[:caller_reference] = @text
+        end
+        case full_tag_name
+        when %r{InvalidationBatch$}
+          @result[:invalidation_batch] = @invalidation_batch
+        end
+      end
+    end
+
+    class AcfInvalidationListParser < RightAWSParser # :nodoc:
+      def reset
+        @result = { :invalidations => [] }
+      end
+      def tagstart(name, attributes)
+        case full_tag_name
+        when %r{InvalidationSummary$}
+          @invalidation = { }
+        end
+      end
+      def tagend(name)
+        case name
+          when 'Marker'      then @result[:marker]       = @text
+          when 'NextMarker'  then @result[:next_marker]  = @text
+          when 'MaxItems'    then @result[:max_items]    = @text.to_i
+          when 'IsTruncated' then @result[:is_truncated] = (@text == 'true')
+          when 'Id'          then @invalidation[:id]           = @text
+          when 'Status'      then @invalidation[:status]       = @text
+        end
+        case full_tag_name
+        when %r{InvalidationSummary$}
+          @result[:invalidations] << @invalidation
         end
       end
     end
