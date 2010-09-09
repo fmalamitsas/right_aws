@@ -12,4 +12,6 @@ Gem::Specification.new do |s|
   s.email             = 'jakecdouglas@gmail.com'
   s.homepage          = 'http://blog.rightscale.com'
   s.rubyforge_project = 'right_aws'
+
+  s.add_dependency(%q<right_http_connection>)
 end
